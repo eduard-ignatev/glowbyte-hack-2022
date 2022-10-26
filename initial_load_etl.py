@@ -63,7 +63,7 @@ for file in sorted(os.listdir(payments_dir)):
     else:
         continue
 # Переводим строки в datetime  
-payments['transaction_dt'] = pd.to_datetime(payments['transaction_dt'])
+payments['transaction_dt'] = pd.to_datetime(payments['transaction_dt'], dayfirst=True)
 
 # Создаем движок для соединения с БД источником
 logger.info('Querying data from source DB...')
@@ -144,8 +144,16 @@ dim_clients = pd.read_sql(
         client_phone AS phone_num,
         dt AS start_dt,
         card_num,
-        LEAD (dt, 1, '9999-01-01 00:00:00') OVER (PARTITION BY client_phone ORDER BY dt) AS end_dt
-    FROM main.rides
+        LEAD (dt, 1, '9999-01-01 00:00:01') OVER (PARTITION BY client_phone ORDER BY dt) - INTERVAL '1 second' AS end_dt
+    FROM
+    (
+        SELECT 
+            client_phone,
+            card_num,
+            MIN(dt) AS dt
+        FROM main.rides
+        GROUP BY client_phone, card_num
+    ) AS cards
     ''', 
     source_db_conn
 )
