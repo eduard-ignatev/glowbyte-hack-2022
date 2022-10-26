@@ -1,2 +1,3 @@
 glowbyte
-*.env
+.env
+.idea

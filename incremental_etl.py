@@ -24,11 +24,11 @@ DWH_DB_URI = os.environ['DWH_DB_URI']
 
 # Создаем движок для соединения с БД источником
 logger.info('Querying data from source DB...')
-source_db_conn = create_engine(SOURCE_DB_URI)
+source_db_conn = create_engine(SOURCE_DB_URI, connect_args={'sslmode':'require'})
 
 # Создаем движок для соединения с БД хранилища данных
 logger.info('Loading data to DWH...')
-dwh_db_conn = create_engine(DWH_DB_URI)
+dwh_db_conn = create_engine(DWH_DB_URI, connect_args={'sslmode':'require'})
 
 
 
