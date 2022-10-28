@@ -200,7 +200,7 @@ logger.info('Loading data to DWH...')
 dwh_db_conn = create_engine(DWH_DB_URI)
 
 # Сбрасываем все строки в хранилище
-dwh_db_conn.execute('TRUNCATE dim_cars, dim_clients, dim_drivers, fact_payments, fact_rides, fact_waybills;')
+dwh_db_conn.execute('TRUNCATE dim_cars, dim_clients, dim_drivers, fact_payments, fact_rides, fact_waybills RESTART IDENTITY;')
 
 # Загружаем данные в соответствующие таблицы
 payments.to_sql('fact_payments', con=dwh_db_conn, schema='dwh_kazan', index=False, if_exists='append')
