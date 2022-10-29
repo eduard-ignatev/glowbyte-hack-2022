@@ -1,9 +1,12 @@
 import os
 import pandas as pd
+import hashlib
+import datetime
 
 from dotenv import load_dotenv
 from ftplib import FTP_TLS
 from sqlalchemy import create_engine
+from sqlalchemy.sql import text
 from loguru import logger
 
 # Загружаем credentials из переменных окружения
@@ -13,6 +16,9 @@ SOURCE_FTP_HOST = os.environ['SOURCE_FTP_HOST']
 SOURCE_FTP_USER = os.environ['SOURCE_FTP_USER']
 SOURCE_FTP_PWD = os.environ['SOURCE_FTP_PWD']
 DWH_DB_URI = os.environ['DWH_DB_URI']
+
+# Время запуска скрипта
+etl_start_dt = datetime.datetime.now()
 
 # --------------------------------------------------------
 # Initial data load - Будем загружать все доступные данные
@@ -62,6 +68,9 @@ for file in sorted(os.listdir(payments_dir)):
         payments = pd.concat([payments, payment], ignore_index=True)
     else:
         continue
+# Делаем уникальный id транзакции с помощью md5 хэша
+payments['transaction_id'] = payments['transaction_dt'].astype(str) + payments['card_num'].astype(str)
+payments['transaction_id'] = payments['transaction_id'].apply(lambda x: hashlib.md5(x.encode()).hexdigest())
 # Переводим строки в datetime  
 payments['transaction_dt'] = pd.to_datetime(payments['transaction_dt'], dayfirst=True)
 
@@ -213,7 +222,7 @@ dim_drivers.to_sql('dim_drivers', con=dwh_db_conn, schema='dwh_kazan', index=Fal
 # Удаление всех файлов из директории с диска
 def delete_all_files(dir: str):
     path = os.getcwd() + '/' + dir
-    filelist = [ f for f in os.listdir(path)]
+    filelist = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
     for f in filelist:
         os.remove(os.path.join(path, f))
 
@@ -222,4 +231,14 @@ logger.info('Cleaning downloadled files from disk...')
 delete_all_files('waybills')
 delete_all_files('payments')
 
-logger.success("Script executed succesfully")
+# Время завершения и выполнения скрипта
+etl_end_dt = datetime.datetime.now()
+etl_duration = etl_end_dt - etl_start_dt
+
+# Логгируем успешное выполнение в рабочую таблицу хранилища
+dwh_db_conn.execute(
+    text("INSERT INTO dwh_kazan.work_batchdate (loaded_until, status) VALUES(:dt, :st)"),
+    {'dt': etl_start_dt, 'st': 'Success'}
+)
+
+logger.success("Script executed succesfully in {} seconds", etl_duration.total_seconds())
