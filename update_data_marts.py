@@ -1,4 +1,42 @@
 
+
+
+
+
+# Update rep_drivers_violations data mart
+query = """
+    INSERT INTO dwh_kazan.rep_drivers_violations(
+        personnel_num,
+        ride,
+        speed,
+        violations_cnt
+    )
+    SELECT q1.personnel_num, q1.ride, q1.speed, q1.violations_cnt + q2.violations_cnt AS violations_cnt
+    FROM 
+    (
+        SELECT *,
+        ROW_NUMBER() OVER(PARTITION BY personnel_num ORDER BY ride) AS violations_cnt
+        FROM (
+          SELECT driver_pers_num AS personnel_num,
+            ride_id AS ride,
+            ROUND(distance_val / (EXTRACT(EPOCH FROM ride_end_dt - ride_start_dt) / 3600), 2)  AS speed
+          FROM dwh_kazan.fact_rides
+          WHERE ride_start_dt IS NOT NULL AND ride_end_dt > %(dt)s
+        ) AS subquery
+      WHERE speed > 85
+    ) AS q1
+    INNER JOIN
+    (
+      SELECT
+        personnel_num,
+        MAX(violations_cnt) AS violations_cnt
+        FROM dwh_kazan.rep_drivers_violations
+        GROUP BY personnel_num
+    ) AS q2
+    ON q1.personnel_num = q2.personnel_num
+"""
+db_conn.execute(query)
+
 # Update rep_drivers_overtime data mart
 query = """
     INSERT INTO dwh_kazan.rep_drivers_overtime(
