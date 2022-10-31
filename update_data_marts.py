@@ -1,15 +1,8 @@
 import os
-import pandas as pd
-import hashlib
 import datetime
-import pangres
 
 from dotenv import load_dotenv
-from ftplib import FTP_TLS
-from dateutil import parser
 from sqlalchemy import create_engine
-from sqlalchemy.sql import text
-from loguru import logger
 
 # Загружаем credentials из переменных окружения
 load_dotenv()
@@ -20,7 +13,7 @@ SOURCE_FTP_PWD = os.environ['SOURCE_FTP_PWD']
 DWH_DB_URI = os.environ['DWH_DB_URI']
 
 # Время запуска скрипта
-etl_start_dt = datetime.datetime.now()
+update_start_dt = datetime.datetime.now()
 
 # -----------------------------------------------------------------------
 # Data Marts - Обновление витрин данных для отчетности
@@ -69,14 +62,14 @@ try:
     )
 
 
-
     ### 4. “Знай своего клиента”
     # Строим на основе dim_clients
     # Подтягиваем информацию по поступившим платежам по каждой карте
     # Подтягиваем информацию по поездкам и стоимости услуг для каждого номера и карты
+    # В итоге делаем UPSERT и обновляем измененные записи 
     dwh_db_conn.execute(
         '''
-        INSERT INTO rep_clients_hist 
+        INSERT INTO rep_clients_hist
         SELECT 
             md5(dc.phone_num || dc.start_dt) AS client_id,
             dc.phone_num,
@@ -110,20 +103,56 @@ try:
             ON fr.client_phone_num = dc.phone_num AND (fr.ride_arrival_dt BETWEEN dc.start_dt AND dc.end_dt)
             GROUP BY fr.client_phone_num, dc.card_num
         ) frg
-        ON dc.phone_num = frg.client_phone_num AND dc.card_num = frg.card_num;
+        ON dc.phone_num = frg.client_phone_num AND dc.card_num = frg.card_num
+        ON CONFLICT ON CONSTRAINT rep_clients_hist_pk DO UPDATE
+        SET 
+            rides_cnt = EXCLUDED.rides_cnt, 
+            cancelled_cnt = EXCLUDED.cancelled_cnt, 
+            spent_amt = EXCLUDED.spent_amt, 
+            debt_amt = EXCLUDED.debt_amt,
+            end_dt = EXCLUDED.end_dt,
+            deleted_flag = EXCLUDED.deleted_flag;
         '''
     )
 
 
+    ### 2. Водители-нарушители
+    # Update rep_drivers_violations data mart
+    query = """
+        INSERT INTO dwh_kazan.rep_drivers_violations(
+            personnel_num,
+            ride,
+            speed,
+            violations_cnt
+        )
+        SELECT q1.personnel_num, q1.ride, q1.speed, q1.violations_cnt + q2.violations_cnt AS violations_cnt
+        FROM 
+        (
+            SELECT *,
+            ROW_NUMBER() OVER(PARTITION BY personnel_num ORDER BY ride) AS violations_cnt
+            FROM (
+            SELECT driver_pers_num AS personnel_num,
+                ride_id AS ride,
+                ROUND(distance_val / (EXTRACT(EPOCH FROM ride_end_dt - ride_start_dt) / 3600), 2)  AS speed
+            FROM dwh_kazan.fact_rides
+            WHERE ride_start_dt IS NOT NULL AND ride_end_dt > %(dt)s
+            ) AS subquery
+        WHERE speed > 85
+        ) AS q1
+        INNER JOIN
+        (
+        SELECT
+            personnel_num,
+            MAX(violations_cnt) AS violations_cnt
+            FROM dwh_kazan.rep_drivers_violations
+            GROUP BY personnel_num
+        ) AS q2
+        ON q1.personnel_num = q2.personnel_num
+    """
+    dwh_db_conn.execute(query)
 
 
-
-
-
-
-
-
-
+    ### 3. Перерабатывающие водители
     # Update rep_drivers_overtime data mart
     query = """
         INSERT INTO dwh_kazan.rep_drivers_overtime(
@@ -148,7 +177,20 @@ try:
         WHERE total_work_time > INTERVAL '8 hour' AND period < INTERVAL '24 hour'
         GROUP BY driver_pers_num
     """
-    db_conn.execute(query)
+    dwh_db_conn.execute(query)
+
+    # Время завершения и выполнения скрипта
+    update_end_dt = datetime.datetime.now()
+    update_duration = update_end_dt - update_start_dt
+
+    # Логгируем успешное выполнение в рабочую таблицу хранилища
+    #
+
+    logger.success("Script executed succesfully in {} seconds", etl_duration.total_seconds())
 
 except Exception:
-    pass
+    
+    # Логгируем неудачное выполнение в рабочую таблицу хранилища
+    #
+
+    logger.exception("Script executed with unexpected error")
