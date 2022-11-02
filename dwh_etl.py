@@ -364,6 +364,22 @@ try:
     # Upload clients updates to target table
     updated_clients_grouped.to_sql('dim_clients', con=dwh_db_conn, schema='dwh_kazan', index=False, if_exists='append')
 
+    # Обнаружили какой-то косяк с дубликатами... Убираем дубликаты 2й раз :))
+    dwh_db_conn.execute(
+        """
+        DROP TABLE IF EXISTS dwh_kazan.work_dim_clients_copy;
+        CREATE TABLE dwh_kazan.work_dim_clients_copy AS 
+        SELECT *
+        FROM dim_clients
+        GROUP BY phone_num, start_dt, card_num , deleted_flag , end_dt;
+        TRUNCATE dim_clients;
+        INSERT INTO dim_clients 
+        SELECT *
+        FROM work_dim_clients_copy;
+        """
+    )
+
+
     # Время завершения и выполнения скрипта
     etl_end_dt = datetime.datetime.now()
     etl_duration = etl_end_dt - etl_start_dt

@@ -3,6 +3,8 @@ import datetime
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.sql import text
+from loguru import logger
 
 # Загружаем credentials из переменных окружения
 load_dotenv()
@@ -25,6 +27,8 @@ try:
 
     # Создаем движок для соединения с БД хранилища данных
     dwh_db_conn = create_engine(DWH_DB_URI, connect_args={'sslmode': 'require'})
+
+    logger.info('Updating Data Marts...')
 
     ### 1. Выплата водителям
     # Считаем информацию по выплатам из fact_rides
@@ -116,9 +120,20 @@ try:
     )
 
 
+
+    # Получаем время последнего успешного запуска
+    last_etl_dt = dwh_db_conn.execute(
+        '''
+        SELECT COALESCE(MAX(bd.loaded_until), '1900-01-01 00:00:00')
+        FROM dwh_kazan.work_batchdate AS bd
+        WHERE bd.status = 'Success'
+        '''
+    ).fetchone()[0]
+
     ### 2. Водители-нарушители
     # Update rep_drivers_violations data mart
-    query = """
+    dt = last_etl_dt
+    query = f"""
         INSERT INTO dwh_kazan.rep_drivers_violations(
             personnel_num,
             ride,
@@ -135,7 +150,7 @@ try:
                 ride_id AS ride,
                 ROUND(distance_val / (EXTRACT(EPOCH FROM ride_end_dt - ride_start_dt) / 3600), 2)  AS speed
             FROM dwh_kazan.fact_rides
-            WHERE ride_start_dt IS NOT NULL AND ride_end_dt > %(dt)s
+            WHERE ride_start_dt IS NOT NULL AND ride_end_dt > '{dt}'
             ) AS subquery
         WHERE speed > 85
         ) AS q1
@@ -154,7 +169,8 @@ try:
 
     ### 3. Перерабатывающие водители
     # Update rep_drivers_overtime data mart
-    query = """
+    dt = last_etl_dt - datetime.timedelta(hours=24)
+    query = f"""
         INSERT INTO dwh_kazan.rep_drivers_overtime(
             personnel_num,
             total_work_time,
@@ -172,7 +188,7 @@ try:
             CAST(SUM(work_end_dt - work_start_dt) OVER (PARTITION BY driver_pers_num) AS TIME) AS total_work_time,
             MAX(work_end_dt) OVER (PARTITION BY driver_pers_num) - MIN(work_start_dt) OVER (PARTITION BY driver_pers_num) AS period
             FROM dwh_kazan.fact_waybills
-            WHERE work_end_dt > %(dt)s
+            WHERE work_end_dt > '{dt}'
         ) AS query
         WHERE total_work_time > INTERVAL '8 hour' AND period < INTERVAL '24 hour'
         GROUP BY driver_pers_num
@@ -186,7 +202,7 @@ try:
     # Логгируем успешное выполнение в рабочую таблицу хранилища
     #
 
-    logger.success("Script executed succesfully in {} seconds", etl_duration.total_seconds())
+    logger.success("Script executed succesfully in {} seconds", update_duration.total_seconds())
 
 except Exception:
     
