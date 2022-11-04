@@ -297,10 +297,7 @@ try:
             client_phone AS phone_num,
             dt AS start_dt,
             card_num,
-            LEAD (dt, 1, '9999-01-01 00:00:01') OVER
-                (
-                    PARTITION BY client_phone ORDER BY dt
-                ) - INTERVAL '1 second' AS end_dt
+            LEAD(dt, 1, '9999-01-01 00:00:01') OVER(PARTITION BY client_phone ORDER BY dt) - INTERVAL '1 second' AS end_dt
         FROM
         (
             SELECT 
@@ -314,16 +311,6 @@ try:
         ''',
         source_db_conn,
         params={'dt': last_etl_dt}
-    )
-
-    # Create work dim_clients table for managing duplicates
-    dwh_db_conn.execute(
-        """
-        DROP TABLE IF EXISTS dwh_kazan.work_dim_clients_copy;
-        CREATE TABLE dwh_kazan.work_dim_clients_copy AS 
-        TABLE dwh_kazan.dim_clients;
-        ALTER TABLE dwh_kazan.work_dim_clients_copy ALTER COLUMN deleted_flag SET DEFAULT 'N';
-        """
     )
 
     # Upload drivers updates to temp_table
@@ -342,43 +329,19 @@ try:
     )
 
     # Upload clients updates to work_dim_clients table
-    updated_clients.to_sql('work_dim_clients_copy', con=dwh_db_conn, schema='dwh_kazan', index=False, if_exists='append')
+    updated_clients.to_sql('dim_clients', con=dwh_db_conn, schema='dwh_kazan', index=False, if_exists='append')
 
-    # Deduplicate work_dim_clients table and get row to append to target table
-    updated_clients_grouped = pd.read_sql(
-        '''
-        SELECT 
-            phone_num,
-            MIN(start_dt) AS start_dt,
-            card_num,
-            deleted_flag,
-            end_dt
-        FROM dwh_kazan.work_dim_clients_copy
-        GROUP BY phone_num, card_num, deleted_flag, end_dt
-        HAVING MIN(start_dt) > %(dt)s
-        ''',
-        dwh_db_conn,
-        params={'dt': last_etl_dt}
-    )
-
-    # Upload clients updates to target table
-    updated_clients_grouped.to_sql('dim_clients', con=dwh_db_conn, schema='dwh_kazan', index=False, if_exists='append')
-
-    # Обнаружили какой-то косяк с дубликатами... Убираем дубликаты 2й раз :))
+    # Deduplicate dim_clients after adding new rows
     dwh_db_conn.execute(
-        """
-        DROP TABLE IF EXISTS dwh_kazan.work_dim_clients_copy;
-        CREATE TABLE dwh_kazan.work_dim_clients_copy AS 
-        SELECT *
-        FROM dim_clients
-        GROUP BY phone_num, start_dt, card_num , deleted_flag , end_dt;
-        TRUNCATE dim_clients;
-        INSERT INTO dim_clients 
-        SELECT *
-        FROM work_dim_clients_copy;
-        """
+        '''
+        DELETE
+        FROM dim_clients dc1
+        USING dim_clients dc2
+        WHERE dc1.ctid < dc2.ctid
+        AND dc1.phone_num = dc2.phone_num
+        AND dc1.start_dt = dc2.start_dt;
+        '''
     )
-
 
     # Время завершения и выполнения скрипта
     etl_end_dt = datetime.datetime.now()

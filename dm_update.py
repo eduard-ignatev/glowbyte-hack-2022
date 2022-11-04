@@ -3,7 +3,6 @@ import datetime
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.sql import text
 from loguru import logger
 
 # Загружаем credentials из переменных окружения
@@ -44,9 +43,9 @@ try:
                 SUM(distance_val) AS total_distance, 
                 SUM(price_amt) AS total_cash,
                 ROUND(SUM(price_amt) * 0.8 - 47.26 * 7 * SUM(distance_val) / 100 - 5 * SUM(distance_val), 2) AS amount,
-                ride_arrival_dt::date AS report_dt
+                ride_end_dt::date AS report_dt
             FROM fact_rides
-            WHERE ride_arrival_dt::date = current_date - INTEGER '1'
+            WHERE ride_end_dt::date = current_date - INTEGER '1' AND ride_start_dt IS NOT NULL --Только завершенные за вчера поездки
             GROUP BY driver_pers_num, ride_arrival_dt::date
         ) fr
         JOIN 
@@ -65,6 +64,66 @@ try:
         '''
     )
 
+    ### 2. Водители-нарушители
+    # 
+    dwh_db_conn.execute(
+        '''
+        INSERT INTO rep_drivers_violations
+        SELECT
+            q1.personnel_num, q1.ride, q1.speed,
+            COALESCE(q1.violations_cnt + q2.violations_cnt, q1.violations_cnt) AS violations_cnt
+        FROM
+        (
+            SELECT
+                driver_pers_num AS personnel_num,
+                ride_id AS ride,
+                ROUND(distance_val / (EXTRACT(EPOCH FROM ride_end_dt - ride_start_dt) / 3600), 2) AS speed,
+                ROW_NUMBER() OVER(PARTITION BY driver_pers_num ORDER BY ride_id) - 1 AS violations_cnt
+            FROM dwh_kazan.fact_rides
+            WHERE
+                ride_end_dt::date = current_date - INTEGER '1'
+                AND ride_start_dt IS NOT NULL
+                AND ROUND(distance_val / (EXTRACT(EPOCH FROM ride_end_dt - ride_start_dt) / 3600), 2) > 85
+        ) AS q1
+        LEFT JOIN
+        (
+            SELECT
+                personnel_num,
+                MAX(violations_cnt) + 1 AS violations_cnt
+            FROM dwh_kazan.rep_drivers_violations
+            GROUP BY personnel_num
+        ) AS q2
+        ON q1.personnel_num = q2.personnel_num;
+        '''
+    )
+
+    ### 3. Перерабатывающие водители
+    # Сначала считаем кумулятивную сумму рабочих часов по путевым листам со скользящим окном 24 часа
+    # Далее корректируем кумулятивную сумму: отсекаем то, что не вошло в 24ч интервал с момента начала предыдущей работы
+    # !некорректно считает сумму с >2 нарушениями подряд
+    dwh_db_conn.execute(
+        '''
+        INSERT INTO rep_drivers_overtime 
+        WITH wt AS
+        (
+            SELECT 
+                driver_pers_num,
+                work_end_dt - work_start_dt AS work_time,
+                SUM(work_end_dt - work_start_dt) OVER (PARTITION BY driver_pers_num ORDER BY work_start_dt RANGE INTERVAL '24 hours' PRECEDING) AS cum_work_time,
+                LAG(work_start_dt) OVER (PARTITION BY driver_pers_num ORDER BY work_start_dt RANGE INTERVAL '24 hours' PRECEDING) AS violation_period_start,
+                LAG(work_start_dt) OVER (PARTITION BY driver_pers_num ORDER BY work_start_dt RANGE INTERVAL '24 hours' PRECEDING) + INTERVAL '24 hour' - work_start_dt  AS violation_delta
+            FROM fact_waybills
+            WHERE work_start_dt::date > current_date - INTERVAL '2 day'
+        )
+        SELECT
+            driver_pers_num AS personnel_num,
+            violation_period_start,
+            CASE WHEN work_time > violation_delta THEN cum_work_time - work_time + violation_delta ELSE cum_work_time END AS violation_work_time
+        FROM wt
+        WHERE CASE WHEN work_time > violation_delta THEN cum_work_time - work_time + violation_delta ELSE cum_work_time END > '08:00:00'
+        AND violation_period_start::date = current_date - INTERVAL '1 day';       
+        '''
+    )
 
     ### 4. “Знай своего клиента”
     # Строим на основе dim_clients
@@ -119,94 +178,16 @@ try:
         '''
     )
 
-
-
-    # Получаем время последнего успешного запуска
-    last_etl_dt = dwh_db_conn.execute(
-        '''
-        SELECT COALESCE(MAX(bd.loaded_until), '1900-01-01 00:00:00')
-        FROM dwh_kazan.work_batchdate AS bd
-        WHERE bd.status = 'Success'
-        '''
-    ).fetchone()[0]
-
-    ### 2. Водители-нарушители
-    # Update rep_drivers_violations data mart
-    dt = last_etl_dt
-    query = f"""
-        INSERT INTO dwh_kazan.rep_drivers_violations(
-            personnel_num,
-            ride,
-            speed,
-            violations_cnt
-        )
-        SELECT q1.personnel_num, q1.ride, q1.speed, q1.violations_cnt + q2.violations_cnt AS violations_cnt
-        FROM 
-        (
-            SELECT *,
-            ROW_NUMBER() OVER(PARTITION BY personnel_num ORDER BY ride) AS violations_cnt
-            FROM (
-            SELECT driver_pers_num AS personnel_num,
-                ride_id AS ride,
-                ROUND(distance_val / (EXTRACT(EPOCH FROM ride_end_dt - ride_start_dt) / 3600), 2)  AS speed
-            FROM dwh_kazan.fact_rides
-            WHERE ride_start_dt IS NOT NULL AND ride_end_dt > '{dt}'
-            ) AS subquery
-        WHERE speed > 85
-        ) AS q1
-        INNER JOIN
-        (
-        SELECT
-            personnel_num,
-            MAX(violations_cnt) AS violations_cnt
-            FROM dwh_kazan.rep_drivers_violations
-            GROUP BY personnel_num
-        ) AS q2
-        ON q1.personnel_num = q2.personnel_num
-    """
-    dwh_db_conn.execute(query)
-
-
-    ### 3. Перерабатывающие водители
-    # Update rep_drivers_overtime data mart
-    dt = last_etl_dt - datetime.timedelta(hours=24)
-    query = f"""
-        INSERT INTO dwh_kazan.rep_drivers_overtime(
-            personnel_num,
-            total_work_time,
-            period_start
-        )
-        SELECT driver_pers_num AS personnel_num,
-            CAST(AVG(total_work_time) AS TIME) AS total_work_time,
-            MAX(work_end_dt) - INTERVAL '24 hour' AS period_start
-        FROM (
-            SELECT 
-            driver_pers_num,
-            work_start_dt,
-            work_end_dt,
-            CAST(work_end_dt - work_start_dt AS TIME) AS work_time,
-            CAST(SUM(work_end_dt - work_start_dt) OVER (PARTITION BY driver_pers_num) AS TIME) AS total_work_time,
-            MAX(work_end_dt) OVER (PARTITION BY driver_pers_num) - MIN(work_start_dt) OVER (PARTITION BY driver_pers_num) AS period
-            FROM dwh_kazan.fact_waybills
-            WHERE work_end_dt > '{dt}'
-        ) AS query
-        WHERE total_work_time > INTERVAL '8 hour' AND period < INTERVAL '24 hour'
-        GROUP BY driver_pers_num
-    """
-    dwh_db_conn.execute(query)
-
     # Время завершения и выполнения скрипта
     update_end_dt = datetime.datetime.now()
     update_duration = update_end_dt - update_start_dt
 
-    # Логгируем успешное выполнение в рабочую таблицу хранилища
-    #
+    # TO-DO: Логгируем успешное выполнение в рабочую таблицу хранилища
 
     logger.success("Script executed succesfully in {} seconds", update_duration.total_seconds())
 
 except Exception:
     
-    # Логгируем неудачное выполнение в рабочую таблицу хранилища
-    #
+    # TO-DO: Логгируем неудачное выполнение в рабочую таблицу хранилища
 
     logger.exception("Script executed with unexpected error")
