@@ -46,7 +46,7 @@ try:
                 ride_end_dt::date AS report_dt
             FROM fact_rides
             WHERE ride_end_dt::date = current_date - INTEGER '1' AND ride_start_dt IS NOT NULL --Только завершенные за вчера поездки
-            GROUP BY driver_pers_num, ride_arrival_dt::date
+            GROUP BY driver_pers_num, ride_end_dt::date
         ) fr
         JOIN 
         (
@@ -117,8 +117,8 @@ try:
         )
         SELECT
             driver_pers_num AS personnel_num,
-            violation_period_start,
-            CASE WHEN work_time > violation_delta THEN cum_work_time - work_time + violation_delta ELSE cum_work_time END AS violation_work_time
+            CASE WHEN work_time > violation_delta THEN cum_work_time - work_time + violation_delta ELSE cum_work_time END AS total_work_time,
+            violation_period_start AS period_start
         FROM wt
         WHERE CASE WHEN work_time > violation_delta THEN cum_work_time - work_time + violation_delta ELSE cum_work_time END > '08:00:00'
         AND violation_period_start::date = current_date - INTERVAL '1 day';       
