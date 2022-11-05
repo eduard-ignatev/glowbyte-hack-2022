@@ -1,6 +1,6 @@
 .ipynb_checkpoints
 glowbyte
-payments
-waybills
+payments/*.csv
+waybills/*.xml
 .env
 .idea
