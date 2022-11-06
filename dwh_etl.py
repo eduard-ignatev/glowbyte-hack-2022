@@ -374,7 +374,7 @@ finally:
     # Удаление всех файлов из директории с диска
     def delete_all_files(dir: str):
         path = os.path.join(os.path.dirname(__file__), dir)
-        filelist = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
+        filelist = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f)) and not f.endswith('.gitkeep')]
         for f in filelist:
             os.remove(os.path.join(path, f))
 
