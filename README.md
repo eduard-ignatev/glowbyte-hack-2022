@@ -1,5 +1,5 @@
-# GLOWBYTE HACK 2022
-Проект был создан в рамках хакатона [GLOWBYTE HACK 2022](https://datapeople.ru/glowbytehack2022). Работа включает в себя:
+# GlowByte Hack 2022 - 2nd Place Winner
+Проект был создан в рамках хакатона [GlowByte Hack 2022](https://datapeople.ru/glowbytehack2022). Работа включает в себя:
 - Создание целевой структуры хранилища данных
 - Разработка ETL процесса
 - Настройка ежедневного запуска таска
@@ -7,7 +7,7 @@
 
 Решение построено на `Python` и `SQL`. Планировщик - `Jobber`. База данных - `PostgreSQL` (инфраструктура организатора).
 
-#### Сильные стороны решения:
+Фичи:
 - Реализована инкрементальная загрузка для снижения нагрузки на источник
 - Реализована версионность по типу SCD2 в таблицах измерений
 - Безопасность данных - использование SSL/TLS при подключении к FTP и базам данных
@@ -18,7 +18,7 @@
 Задача первого этапа - настроить ETL процесс, который будет забирать данные из источника и раскладывать их по целевым таблицам в описанную в документации структуру в хранилище.
 
 ### 1й источник данных - СУБД PostgreSQL
-image.png
+![Source DB ER](https://user-images.githubusercontent.com/97912967/201328673-f61d6640-bd89-4b06-b59d-a733b61d80ed.png)
 
 **Таблица main.rides**  
 Заказы, поступающие от клиентов.
@@ -36,7 +36,7 @@ image.png
 **Каталог waybills**  
 Содержит путевые листы в формате XML, в одном файле один путевой лист. Путевые листы содержат информацию о том, какой водитель в какой период времени на какой машине работал.
 
-image.png
+![Waybill structure](https://user-images.githubusercontent.com/97912967/201328741-4ee66306-2952-48e9-b2b7-aa11066797de.png)
 
 **Каталог payments**  
 Содержит бухгалтерские выписки о поступлении денег от клиентов на
@@ -58,7 +58,7 @@ image.png
 Заполнение фактовой таблицы fact_rides должно производиться только для
 завершенных поездок. То есть в источнике для поездки должен стоять либо статус END, либо статус CANCEL. Незавершенные поездки недопустимы.
 
-image.png
+![Target DWH ER](https://user-images.githubusercontent.com/97912967/201328780-326f2640-c104-4b16-a024-4283284d10da.png)
 
 ### Требования к отчетам
 Для ежедневных витрин необходимо построить полный отчет за завершенный
@@ -128,10 +128,20 @@ image.png
 
 ## Демонстрация
 Выполнение скрипта:
-
+![Script running](https://user-images.githubusercontent.com/97912967/201327690-849a576b-c2a8-46b5-893f-8f63954f8661.png)
 
 Настроенный планировщик:
-
+![Scheduler](https://user-images.githubusercontent.com/97912967/201327716-361f6253-a7ac-4b9e-a2d5-d09fd04c1fd0.png)
 
 Результирующие таблицы:
-
+![fact_waybills](https://user-images.githubusercontent.com/97912967/201328119-37b33a2f-0a6e-45bf-ad69-40131bff6cfc.png)
+![fact_payments](https://user-images.githubusercontent.com/97912967/201328124-a1a92c78-8ab8-410a-85a3-7ddf1dc7850c.png)
+![fact_rides](https://user-images.githubusercontent.com/97912967/201328126-5f72d320-dc3d-4d99-a0bd-1b2754538a74.png)
+![dim_cars](https://user-images.githubusercontent.com/97912967/201328127-1db803b2-e4b3-4e9b-b481-d4d3eb845a94.png)
+![dim_drivers](https://user-images.githubusercontent.com/97912967/201328128-e3ce7c5d-0107-438f-8db1-3a8370c5c608.png)
+![dim_clients](https://user-images.githubusercontent.com/97912967/201328132-4e61ebd5-c5c0-4652-b16b-03e426dd1bbd.png)
+![rep_drivers_payments](https://user-images.githubusercontent.com/97912967/201328134-187d2d81-bbde-4158-a94f-b305ab0967cb.png)
+![rep_drivers_violations](https://user-images.githubusercontent.com/97912967/201328140-aaaf4d81-8fce-4221-ab10-e2c5f72f38a6.png)
+![rep_drivers_overtime](https://user-images.githubusercontent.com/97912967/201328141-d802e0fd-9be0-4f8d-8e0e-6d6ef9826c6f.png)
+![rep_clients_hist](https://user-images.githubusercontent.com/97912967/201328533-32211bf2-b8a4-42f0-8e59-0c262e016188.png)
+![work_batchdate](https://user-images.githubusercontent.com/97912967/201328559-db5f3ba1-f67d-4eaa-8c25-4a11d437bc2a.png)
