@@ -171,8 +171,8 @@ try:
     for idx in fact_rides.index:
         fact_rides.loc[idx, 'driver_pers_num'] = fact_waybills[
             (fact_rides.loc[idx, 'car_plate_num'] == fact_waybills['car_plate_num']) & 
-            (fact_rides.loc[idx, 'dt_begin'] > fact_waybills['work_start_dt']) & 
-            (fact_rides.loc[idx, 'dt_begin'] < fact_waybills['work_end_dt'])
+            (fact_rides.loc[idx, 'dt_begin'] >= fact_waybills['work_start_dt']) & 
+            (fact_rides.loc[idx, 'dt_begin'] <= fact_waybills['work_end_dt'])
         ]['driver_pers_num'].values[0]
     fact_rides = fact_rides[[
         'ride', 'point_from', 'point_to', 'distance', 'price', 'client_phone', 'driver_pers_num', 
@@ -219,7 +219,7 @@ try:
     ### dim_cars
     # Get car_pool updates
     updated_cars = pd.read_sql(
-        """
+        '''
         SELECT plate_num,
             update_dt AS start_dt,
             model AS model_name,
@@ -227,7 +227,7 @@ try:
             '9999-01-01 00:00:00' AS end_dt
         FROM main.car_pool
         WHERE update_dt > %(dt)s
-        """, 
+        ''', 
         source_db_conn,
         params={'dt': last_etl_dt}
     )
@@ -238,13 +238,14 @@ try:
 
     # Update end_dt for previously loaded rows
     dwh_db_conn.execute(
-        """
-        UPDATE dwh_kazan.dim_cars AS f
-        SET end_dt = t.start_dt::TIMESTAMP - INTERVAL '1 second'
-        FROM dwh_kazan.work_temp_table AS t
+        '''
+        UPDATE dim_cars AS f
+        SET f.end_dt = t.start_dt - INTERVAL '1 second'
+        FROM work_temp_table AS t
         WHERE f.plate_num = t.plate_num
-            AND f.end_dt = '9999-01-01 00:00:00'
-        """
+        AND f.end_dt = '9999-01-01 00:00:00'
+        AND t.revision_dt != f.revision_dt
+        '''
     )
 
     # Upload car_pool updates to target table
@@ -277,13 +278,14 @@ try:
 
     # Update end_dt for previously loaded rows
     dwh_db_conn.execute(
-        """
-        UPDATE dwh_kazan.dim_drivers AS f
-        SET end_dt = t.start_dt::TIMESTAMP - INTERVAL '1 second'
-        FROM dwh_kazan.work_temp_table AS t
+        '''
+        UPDATE dim_drivers AS f
+        SET f.end_dt = t.start_dt - INTERVAL '1 second'
+        FROM work_temp_table AS t
         WHERE f.personnel_num = t.personnel_num
-            AND f.end_dt = '9999-01-01 00:00:00'
-        """
+        AND f.end_dt = '9999-01-01 00:00:00'
+        AND t.card_num != f.card_num
+        '''
     )
 
     # Upload drivers updates to target table
@@ -318,14 +320,14 @@ try:
 
     # Update end_dt for previously loaded rows
     dwh_db_conn.execute(
-        """
-        UPDATE dwh_kazan.dim_clients AS f
-        SET end_dt = t.start_dt::TIMESTAMP - INTERVAL '1 second'
-        FROM dwh_kazan.work_temp_table AS t
+        '''
+        UPDATE dim_clients AS f
+        SET f.end_dt = t.start_dt - INTERVAL '1 second'
+        FROM work_temp_table AS t
         WHERE f.phone_num = t.phone_num
-            AND f.end_dt = '9999-01-01 00:00:00'
-            AND t.card_num != f.card_num
-        """
+        AND f.end_dt = '9999-01-01 00:00:00'
+        AND t.card_num != f.card_num
+        '''
     )
 
     # Upload clients updates to work_dim_clients table
@@ -384,4 +386,4 @@ finally:
     delete_all_files('payments')
 
     # Дропаем временные таблицы в хранилище
-    dwh_db_conn.execute('DROP TABLE IF EXISTS work_temp_table, work_dim_clients_copy')
+    dwh_db_conn.execute('DROP TABLE IF EXISTS work_temp_table')

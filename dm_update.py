@@ -136,31 +136,31 @@ try:
         SELECT 
             md5(dc.phone_num || dc.start_dt) AS client_id,
             dc.phone_num,
-            frg.rides_cnt,
-            frg.cancelled_cnt,
-            frg.spent_amt,
-            frg.spent_amt - fp.total_paid AS debt_amt,
+            COALESCE(frg.total_rides_cnt, 0) - COALESCE(frg.cancelled_cnt, 0) AS rides_cnt,
+            COALESCE(frg.cancelled_cnt, 0),
+            SUM(COALESCE(fp.paid_amt, 0)) OVER(PARTITION BY phone_num ORDER BY start_dt) AS spent_amt,
+            SUM(COALESCE(frg.total_amt, 0) - COALESCE(fp.paid_amt, 0)) OVER(PARTITION BY phone_num ORDER BY start_dt) AS debt_amt,
             dc.start_dt,
             dc.end_dt,
             dc.deleted_flag
         FROM dim_clients dc
-        JOIN
+        LEFT JOIN
         (
             SELECT
                 SUBSTRING(card_num, 1, 4) || ' ' || SUBSTRING(card_num, 5, 4) || ' ' || SUBSTRING(card_num, 9, 4) || ' ' || SUBSTRING(card_num, 13, 4) AS card_num,
-                SUM(transaction_amt) AS total_paid
+                SUM(transaction_amt) AS paid_amt
             FROM fact_payments
             GROUP BY card_num
         ) fp
         ON dc.card_num = fp.card_num
-        JOIN
+        LEFT JOIN
         (
             SELECT 
                 fr.client_phone_num,
                 dc.card_num,
-                COUNT(fr.ride_id) AS rides_cnt,
+                COUNT(fr.ride_id) AS total_rides_cnt,
                 COUNT(CASE WHEN fr.ride_start_dt IS NULL THEN 1 ELSE NULL END) AS cancelled_cnt,
-                SUM(CASE WHEN fr.ride_start_dt IS NULL THEN NULL ELSE fr.price_amt END) AS spent_amt
+                SUM(CASE WHEN fr.ride_start_dt IS NULL THEN NULL ELSE fr.price_amt END) AS total_amt
             FROM fact_rides fr
             JOIN dim_clients dc 
             ON fr.client_phone_num = dc.phone_num AND (fr.ride_arrival_dt BETWEEN dc.start_dt AND dc.end_dt)
